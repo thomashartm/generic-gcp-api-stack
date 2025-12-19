@@ -1,3 +1,5 @@
+# local IDE files
+.idea/
 # Local .terraform directories
 .terraform/
 
@@ -35,3 +37,36 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Terragrunt cache
+.terragrunt-cache/
+
+# Terragrunt debug files
+terragrunt-debug.tfvars.json
+
+# Lock files (commit these if you want consistent provider versions)
+.terraform.lock.hcl
+
+# Environment-specific variable files (keep .example files)
+*.auto.tfvars
+secrets.tfvars
+local.tfvars
+
+# GCP service account keys (never commit these!)
+*-key.json
+*.json.key
+service-account-*.json
+
+# Local development files
+.env
+.env.local
+*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*.tmp
