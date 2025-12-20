@@ -1,0 +1,6 @@
+# Staging environment configuration
+# To create staging environment:
+# 1. Copy all files from dev/ to staging/
+# 2. Update terragrunt.hcl with staging project ID
+# 3. Update resource sizes for production-like configuration
+# 4. See stacks/README.md for detailed instructions

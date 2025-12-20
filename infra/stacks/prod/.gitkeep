@@ -1,0 +1,7 @@
+# Production environment configuration
+# To create production environment:
+# 1. Copy all files from dev/ to prod/
+# 2. Update terragrunt.hcl with production project ID
+# 3. Update resource sizes for production requirements
+# 4. Enable HA, adaptive protection, and critical alerts
+# 5. See stacks/README.md for detailed instructions
