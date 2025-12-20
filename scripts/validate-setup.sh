@@ -182,9 +182,13 @@ validate_project() {
   print_check "required APIs"
   local all_apis_enabled=true
   local disabled_apis=()
+  local enabled_services
+
+  # Fetch all enabled APIs once to improve performance and reliability
+  enabled_services=$(gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" 2>/dev/null || true)
 
   for api in "${REQUIRED_APIS[@]}"; do
-    if ! gcloud services list --enabled --project="$PROJECT_ID" --format="value(name)" 2>/dev/null | grep -q "^${api}$"; then
+    if ! echo "$enabled_services" | grep -q "^${api}$"; then
       all_apis_enabled=false
       disabled_apis+=("$api")
     fi

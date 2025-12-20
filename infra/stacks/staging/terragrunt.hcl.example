@@ -1,0 +1,15 @@
+# Staging Environment Configuration
+# Copy this file to terragrunt.hcl and update the project_id
+
+include "root" {
+  path = find_in_parent_folders()
+}
+
+inputs = {
+  environment = "staging"
+
+  # IMPORTANT: Update this with your actual GCP project ID
+  project_id  = "your-project-staging"  # CHANGE THIS!
+
+  region      = "europe-west6"
+}

@@ -1,4 +1,4 @@
-Start# GCP Terraform Stack Implementation Plan
+aStart# GCP Terraform Stack Implementation Plan
 
 ## Overview
 Build a production-ready, multi-environment GCP infrastructure stack for a TypeScript NestJS API application using Terraform modules and Terragrunt for environment management.
