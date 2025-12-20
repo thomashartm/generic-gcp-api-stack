@@ -3,13 +3,12 @@
 ################################################################################
 # GCP Project Setup Script
 #
-# This script creates GCP projects for dev, staging, and prod environments,
-# enables required APIs, and sets up Terraform state buckets.
+# This script sets up an existing GCP project by enabling required APIs
+# and creating the Terraform state bucket.
 #
 # Prerequisites:
 # - gcloud CLI installed and authenticated
-# - Billing account ID available
-# - Organization ID (if using GCP organization)
+# - Existing GCP project with billing enabled
 #
 # Usage:
 #   ./scripts/setup-gcp-projects.sh
@@ -24,10 +23,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Project configuration
-PROJECT_PREFIX="generic-demo"
+# Configuration
 REGION="europe-west6"
-PROJECTS=("dev")  # Start with dev only, add staging/prod later
+PROJECT_ID=""
+ENVIRONMENT=""
 
 # Required APIs
 REQUIRED_APIS=(
@@ -66,6 +65,10 @@ print_error() {
   echo -e "${RED}✗${NC} $1"
 }
 
+print_warn() {
+  echo -e "${YELLOW}⚠${NC} $1"
+}
+
 check_prerequisites() {
   print_header "Checking Prerequisites"
 
@@ -81,73 +84,71 @@ check_prerequisites() {
     print_error "Not authenticated with gcloud. Run: gcloud auth login"
     exit 1
   fi
-  print_success "Authenticated with gcloud"
 
-  # Get billing account
-  print_info "Fetching billing accounts..."
-  BILLING_ACCOUNTS=$(gcloud billing accounts list --format="value(name)" 2>/dev/null)
-
-  if [ -z "$BILLING_ACCOUNTS" ]; then
-    print_error "No billing accounts found. Please set up billing at: https://console.cloud.google.com/billing"
-    exit 1
-  fi
-
-  # If multiple billing accounts, let user choose
-  BILLING_ACCOUNT_COUNT=$(echo "$BILLING_ACCOUNTS" | wc -l | xargs)
-
-  if [ "$BILLING_ACCOUNT_COUNT" -eq 1 ]; then
-    BILLING_ACCOUNT_ID=$BILLING_ACCOUNTS
-    print_success "Using billing account: $BILLING_ACCOUNT_ID"
-  else
-    print_info "Multiple billing accounts found:"
-    gcloud billing accounts list
-    echo ""
-    read -p "Enter billing account ID to use: " BILLING_ACCOUNT_ID
-  fi
+  ACTIVE_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -1)
+  print_success "Authenticated with gcloud as: $ACTIVE_ACCOUNT"
 
   echo ""
 }
 
-create_project() {
-  local env=$1
-  local project_id="${PROJECT_PREFIX}-${env}"
+get_project_info() {
+  print_header "GCP Project Information"
 
-  print_info "Checking if project '$project_id' exists..."
+  # Prompt for project ID
+  echo ""
+  read -rp "Enter your GCP project ID: " PROJECT_ID
+  echo ""
 
-  # Check if project already exists
-  if gcloud projects describe "$project_id" &> /dev/null; then
-    print_success "Project '$project_id' already exists, skipping creation"
-    return 0
+  # Verify project exists
+  print_info "Verifying project '$PROJECT_ID' exists..."
+
+  if ! gcloud projects describe "$PROJECT_ID" &> /dev/null; then
+    print_error "Project '$PROJECT_ID' not found or you don't have access to it"
+    print_info "Please verify the project ID and ensure you have the necessary permissions"
+    exit 1
   fi
 
-  print_info "Creating project: $project_id"
+  print_success "Project '$PROJECT_ID' found"
 
-  # Create project
-  if gcloud projects create "$project_id" --name="$project_id" 2>&1; then
-    print_success "Project '$project_id' created"
+  # Check if billing is enabled
+  print_info "Checking if billing is enabled..."
+  BILLING_INFO=$(gcloud billing projects describe "$PROJECT_ID" --format="value(billingEnabled)" 2>/dev/null || echo "unknown")
+
+  if [ "$BILLING_INFO" = "True" ]; then
+    print_success "Billing is enabled for $PROJECT_ID"
   else
-    print_error "Failed to create project '$project_id'"
-    return 1
+    print_warn "Could not verify billing status. Please ensure billing is enabled."
+    read -rp "Continue anyway? (y/n) " -n 1
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      print_info "Setup cancelled"
+      exit 0
+    fi
   fi
 
-  # Link billing account
-  print_info "Linking billing account to $project_id"
-  if gcloud billing projects link "$project_id" --billing-account="$BILLING_ACCOUNT_ID" 2>&1; then
-    print_success "Billing account linked to $project_id"
-  else
-    print_error "Failed to link billing account to $project_id"
-    return 1
-  fi
+  # Prompt for environment name
+  echo ""
+  print_info "This environment name will be used as a prefix in the Terraform state bucket"
+  read -rp "Enter environment name (e.g., dev, staging, prod): " ENVIRONMENT
+  echo ""
+
+  print_success "Configuration:"
+  print_info "  Project ID: $PROJECT_ID"
+  print_info "  Environment: $ENVIRONMENT"
+  print_info "  Region: $REGION"
+
+  echo ""
 }
 
 enable_apis() {
-  local project_id=$1
+  print_header "Enabling Required APIs"
 
-  print_info "Enabling required APIs for $project_id"
+  print_info "Enabling required APIs for $PROJECT_ID"
+  echo ""
 
   for api in "${REQUIRED_APIS[@]}"; do
     echo -n "  Enabling $api... "
-    if gcloud services enable "$api" --project="$project_id" 2>&1 > /dev/null; then
+    if gcloud services enable "$api" --project="$PROJECT_ID" 2>&1 > /dev/null; then
       echo -e "${GREEN}✓${NC}"
     else
       echo -e "${RED}✗${NC}"
@@ -155,46 +156,56 @@ enable_apis() {
     fi
   done
 
-  print_success "APIs enabled for $project_id"
+  echo ""
+  print_success "All required APIs have been enabled for $PROJECT_ID"
+  echo ""
 }
 
-create_shared_state_bucket() {
-  local bucket_name="${PROJECT_PREFIX}-terraform-state"
-  local bucket_project="${PROJECT_PREFIX}-dev"  # Create in dev project
+create_state_bucket() {
+  print_header "Setting Up Terraform State Storage"
 
-  print_info "Creating shared Terraform state bucket: $bucket_name"
+  # Use a bucket name based on project ID
+  local bucket_name="${PROJECT_ID}-terraform-state"
+
+  print_info "Terraform state bucket: gs://${bucket_name}"
+  echo ""
 
   # Check if bucket already exists
   if gsutil ls -b "gs://${bucket_name}" &> /dev/null; then
-    print_success "Bucket '$bucket_name' already exists, skipping creation"
+    print_success "Bucket 'gs://${bucket_name}' already exists"
+
+    # Check if environment prefix exists
+    if gsutil ls "gs://${bucket_name}/${ENVIRONMENT}/" &> /dev/null; then
+      print_success "Environment prefix '${ENVIRONMENT}/' already exists in bucket"
+    else
+      print_info "Creating environment prefix '${ENVIRONMENT}/' in bucket"
+      echo "Terraform state for ${ENVIRONMENT} environment" | gsutil cp - "gs://${bucket_name}/${ENVIRONMENT}/.terragrunt-bucket-setup" 2>&1 > /dev/null || true
+      print_success "Environment prefix '${ENVIRONMENT}/' created"
+    fi
+
+    echo ""
     return 0
   fi
 
-  # Ensure dev project exists
-  if ! gcloud projects describe "$bucket_project" &> /dev/null; then
-    print_error "Dev project '$bucket_project' must be created first"
-    return 1
-  fi
-
-  # Create bucket in dev project
-  print_info "Creating bucket in project: $bucket_project"
-  if gsutil mb -p "$bucket_project" -l "$REGION" "gs://${bucket_name}" 2>&1; then
-    print_success "Bucket '$bucket_name' created"
+  # Create bucket
+  print_info "Creating bucket 'gs://${bucket_name}' in project: $PROJECT_ID"
+  if gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${bucket_name}" 2>&1; then
+    print_success "Bucket 'gs://${bucket_name}' created"
   else
-    print_error "Failed to create bucket '$bucket_name'"
+    print_error "Failed to create bucket 'gs://${bucket_name}'"
     return 1
   fi
 
   # Enable versioning
-  print_info "Enabling versioning on $bucket_name"
+  print_info "Enabling versioning on bucket"
   if gsutil versioning set on "gs://${bucket_name}" 2>&1; then
-    print_success "Versioning enabled on $bucket_name"
+    print_success "Versioning enabled"
   else
     print_error "Failed to enable versioning"
   fi
 
   # Set lifecycle policy to keep last 10 versions
-  print_info "Setting lifecycle policy on $bucket_name"
+  print_info "Setting lifecycle policy (keep last 10 versions)"
   cat > /tmp/lifecycle.json <<EOF
 {
   "lifecycle": {
@@ -211,32 +222,19 @@ create_shared_state_bucket() {
 EOF
 
   if gsutil lifecycle set /tmp/lifecycle.json "gs://${bucket_name}" 2>&1; then
-    print_success "Lifecycle policy set on $bucket_name"
+    print_success "Lifecycle policy configured"
   else
     print_error "Failed to set lifecycle policy"
   fi
 
   rm /tmp/lifecycle.json
 
-  # Create environment folders (optional, but helps with visibility)
-  print_info "Creating environment prefixes in bucket"
-  for env in "${PROJECTS[@]}"; do
-    # Create a placeholder file to establish the folder
-    echo "Terraform state for ${env} environment" | gsutil cp - "gs://${bucket_name}/${env}/.terragrunt-bucket-setup" 2>&1 > /dev/null || true
-  done
-  print_success "Environment prefixes created: ${PROJECTS[*]}"
-}
+  # Create environment prefix
+  print_info "Creating environment prefix '${ENVIRONMENT}/'"
+  echo "Terraform state for ${ENVIRONMENT} environment" | gsutil cp - "gs://${bucket_name}/${ENVIRONMENT}/.terragrunt-bucket-setup" 2>&1 > /dev/null || true
+  print_success "Environment prefix '${ENVIRONMENT}/' created"
 
-setup_project() {
-  local env=$1
-  local project_id="${PROJECT_PREFIX}-${env}"
-
-  print_header "Setting up $env environment (Project: $project_id)"
-
-  create_project "$env"
-  enable_apis "$project_id"
-
-  print_success "Setup complete for $project_id\n"
+  echo ""
 }
 
 ################################################################################
@@ -244,55 +242,28 @@ setup_project() {
 ################################################################################
 
 main() {
-  print_header "GCP Project Setup - Development First Approach"
+  print_header "GCP Project Setup Script"
 
-  echo "This script will set up your GCP infrastructure."
+  echo "This script will configure your existing GCP project for Terraform infrastructure."
   echo ""
   echo "What it does:"
-  echo "  1. Create GCP project(s)"
-  echo "  2. Enable required APIs"
-  echo "  3. Create Terraform state bucket with versioning"
-  echo ""
-  echo "Recommended: Start with DEV environment only, add staging/prod later."
+  echo "  1. Verify your GCP project exists and has billing enabled"
+  echo "  2. Enable required APIs for the infrastructure stack"
+  echo "  3. Create Terraform state bucket with versioning (if it doesn't exist)"
   echo ""
 
-  # Ask which environments to set up
-  echo "Which environments do you want to set up?"
-  echo "  1) Dev only (recommended to start)"
-  echo "  2) Dev + Staging"
-  echo "  3) Dev + Staging + Prod"
-  echo ""
-  read -p "Enter choice (1-3): " -n 1 -r choice
-  echo ""
-  echo ""
+  # Check prerequisites
+  check_prerequisites
 
-  case $choice in
-    1)
-      PROJECTS=("dev")
-      print_info "Setting up DEV environment only"
-      ;;
-    2)
-      PROJECTS=("dev" "staging")
-      print_info "Setting up DEV and STAGING environments"
-      ;;
-    3)
-      PROJECTS=("dev" "staging" "prod")
-      print_info "Setting up DEV, STAGING, and PROD environments"
-      ;;
-    *)
-      print_error "Invalid choice. Defaulting to DEV only."
-      PROJECTS=("dev")
-      ;;
-  esac
+  # Get project information
+  get_project_info
 
+  # Confirmation
   echo ""
-  echo "Projects to be created:"
-  for env in "${PROJECTS[@]}"; do
-    echo "  - ${PROJECT_PREFIX}-${env}"
-  done
+  print_info "Ready to configure project '$PROJECT_ID' for environment '$ENVIRONMENT'"
   echo ""
-
-  read -p "Do you want to continue? (y/n) " -n 1 -r
+  read -rp "Do you want to continue? (y/n) " -n 1
+  echo ""
   echo ""
 
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -300,55 +271,45 @@ main() {
     exit 0
   fi
 
-  check_prerequisites
+  # Enable APIs
+  enable_apis
 
-  # Setup each environment
-  for env in "${PROJECTS[@]}"; do
-    setup_project "$env"
-  done
+  # Create state bucket
+  create_state_bucket
 
-  # Create shared state bucket (only once, in dev project)
-  print_header "Setting up Shared Terraform State Storage"
-  create_shared_state_bucket
+  # Summary
+  print_header "Setup Complete!"
 
-  print_header "Setup Summary"
+  local bucket_name="${PROJECT_ID}-terraform-state"
 
-  echo "All projects have been set up successfully!"
+  echo "Configuration summary:"
   echo ""
-  echo "Projects created:"
-  for env in "${PROJECTS[@]}"; do
-    project_id="${PROJECT_PREFIX}-${env}"
-    echo "  - $project_id"
-  done
+  echo "  Project ID:  $PROJECT_ID"
+  echo "  Environment: $ENVIRONMENT"
+  echo "  Region:      $REGION"
   echo ""
-
-  local bucket_name="${PROJECT_PREFIX}-terraform-state"
   echo "Terraform state storage:"
   echo "  Bucket: gs://${bucket_name}"
-  echo "  Location: ${REGION} (in ${PROJECT_PREFIX}-dev project)"
+  echo "  Prefix: ${ENVIRONMENT}/"
+  echo "  Location: ${REGION}"
   echo ""
-  echo "  Environment state prefixes:"
-  for env in "${PROJECTS[@]}"; do
-    echo "    - gs://${bucket_name}/${env}/"
-  done
+  echo "Next steps:"
+  echo "  1. Validate setup: ./scripts/validate-setup.sh $PROJECT_ID"
+  echo "  2. Review project in GCP Console: https://console.cloud.google.com/home/dashboard?project=$PROJECT_ID"
+  echo "  3. Configure Terragrunt in infra/terragrunt.hcl:"
+  echo "     - Set bucket: ${bucket_name}"
+  echo "     - Set prefix: ${ENVIRONMENT}/"
+  echo "     - Set project: ${PROJECT_ID}"
+  echo "  4. Start creating Terraform modules in infra/modules/"
   echo ""
 
-  # Show how to add more environments later
-  if [ ${#PROJECTS[@]} -eq 1 ] && [ "${PROJECTS[0]}" = "dev" ]; then
-    echo "To add staging or prod later:"
-    echo "  1. Re-run this script and select option 2 or 3"
-    echo "  2. New environment folders will be added to the same state bucket"
+  if [ "$ENVIRONMENT" = "dev" ]; then
+    echo "To add staging or prod environments later:"
+    echo "  - Re-run this script with a different environment name"
+    echo "  - Use the same bucket name but different prefixes (staging/, prod/)"
     echo ""
   fi
 
-  echo "Next steps:"
-  echo "  1. Validate setup: ./scripts/validate-setup.sh"
-  echo "  2. Review created projects in GCP Console"
-  echo "  3. Start creating Terraform modules in infra/modules/"
-  echo "  4. Configure Terragrunt in infra/stacks/dev/"
-  echo "     - Set bucket: ${bucket_name}"
-  echo "     - Set prefix: dev/"
-  echo ""
   print_success "GCP project setup complete!"
 }
 

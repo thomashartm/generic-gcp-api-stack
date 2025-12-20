@@ -3,11 +3,14 @@
 ################################################################################
 # GCP Setup Validation Script
 #
-# This script validates that all GCP projects, APIs, and resources are
-# properly configured before proceeding with Terraform deployment.
+# This script validates that your GCP project, APIs, and Terraform state bucket
+# are properly configured before proceeding with Terraform deployment.
 #
 # Usage:
-#   ./scripts/validate-setup.sh
+#   ./scripts/validate-setup.sh <project-id>
+#
+# Example:
+#   ./scripts/validate-setup.sh my-gcp-project-dev
 ################################################################################
 
 set -e  # Exit on error
@@ -20,11 +23,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Project configuration
-PROJECT_PREFIX="generic-demo"
+# Configuration
 REGION="europe-west6"
-ALL_PROJECTS=("dev" "staging" "prod")
-EXISTING_PROJECTS=()
+PROJECT_ID="${1:-}"
 
 # Required APIs
 REQUIRED_APIS=(
@@ -94,30 +95,17 @@ print_info() {
 # Validation Functions
 ################################################################################
 
-detect_existing_projects() {
-  print_section "Detecting Projects"
-
-  for env in "${ALL_PROJECTS[@]}"; do
-    local project_id="${PROJECT_PREFIX}-${env}"
-    print_check "$project_id exists"
-
-    if gcloud projects describe "$project_id" &> /dev/null; then
-      EXISTING_PROJECTS+=("$env")
-      print_pass
-      print_info "Project found: $project_id"
-    else
-      echo -e "${BLUE}ℹ SKIP${NC}"
-      print_info "Project not found (will skip validation)"
-    fi
-  done
-
-  if [ ${#EXISTING_PROJECTS[@]} -eq 0 ]; then
-    print_fail "No projects found. Run: ./scripts/setup-gcp-projects.sh"
-    return 1
+check_project_id_provided() {
+  if [ -z "$PROJECT_ID" ]; then
+    print_fail "No project ID provided"
+    echo ""
+    echo "Usage: ./scripts/validate-setup.sh <project-id>"
+    echo ""
+    echo "Example:"
+    echo "  ./scripts/validate-setup.sh my-gcp-project-dev"
+    echo ""
+    exit 1
   fi
-
-  echo ""
-  echo "Found ${#EXISTING_PROJECTS[@]} project(s): ${EXISTING_PROJECTS[*]}"
 }
 
 validate_prerequisites() {
@@ -167,27 +155,27 @@ validate_prerequisites() {
 }
 
 validate_project() {
-  local env=$1
-  local project_id="${PROJECT_PREFIX}-${env}"
+  print_section "Project Validation"
 
-  print_section "Project: $project_id"
+  print_info "Validating project: $PROJECT_ID"
+  echo ""
 
   # Check if project exists
   print_check "project exists"
-  if gcloud projects describe "$project_id" &> /dev/null; then
+  if gcloud projects describe "$PROJECT_ID" &> /dev/null; then
     print_pass
   else
-    print_fail "Project not found. Run: ./scripts/setup-gcp-projects.sh"
+    print_fail "Project not found. Please verify the project ID."
     return 1
   fi
 
   # Check billing
   print_check "billing enabled"
-  BILLING_INFO=$(gcloud billing projects describe "$project_id" --format="value(billingEnabled)" 2>/dev/null)
+  BILLING_INFO=$(gcloud billing projects describe "$PROJECT_ID" --format="value(billingEnabled)" 2>/dev/null || echo "unknown")
   if [ "$BILLING_INFO" = "True" ]; then
     print_pass
   else
-    print_fail "Billing not enabled"
+    print_fail "Billing not enabled or could not verify"
   fi
 
   # Check each required API
@@ -196,7 +184,7 @@ validate_project() {
   local disabled_apis=()
 
   for api in "${REQUIRED_APIS[@]}"; do
-    if ! gcloud services list --enabled --project="$project_id" --format="value(name)" 2>/dev/null | grep -q "^${api}$"; then
+    if ! gcloud services list --enabled --project="$PROJECT_ID" --format="value(name)" 2>/dev/null | grep -q "^${api}$"; then
       all_apis_enabled=false
       disabled_apis+=("$api")
     fi
@@ -210,65 +198,55 @@ validate_project() {
     for api in "${disabled_apis[@]}"; do
       print_info "Missing: $api"
     done
+    print_info "Run: ./scripts/setup-gcp-projects.sh"
   fi
-
-  # Note: Terraform state bucket validation is done separately in validate_shared_state_bucket
 
   # Check default service accounts
   print_check "default service accounts"
-  local compute_sa="${project_id//-/}@${project_id}.iam.gserviceaccount.com"
-  if gcloud iam service-accounts describe "compute@developer.gserviceaccount.com" --project="$project_id" &> /dev/null 2>&1 || \
-     gcloud iam service-accounts list --project="$project_id" --format="value(email)" 2>/dev/null | grep -q "@"; then
+  if gcloud iam service-accounts list --project="$PROJECT_ID" --format="value(email)" 2>/dev/null | grep -q "@"; then
     print_pass
   else
     print_warn "Default service accounts may not be initialized yet"
   fi
 }
 
-validate_shared_state_bucket() {
+validate_state_bucket() {
   print_section "Terraform State Storage"
 
-  local bucket_name="${PROJECT_PREFIX}-terraform-state"
+  local bucket_name="${PROJECT_ID}-terraform-state"
 
   # Check if bucket exists
-  print_check "shared state bucket exists"
+  print_check "state bucket exists"
   if gsutil ls -b "gs://${bucket_name}" &> /dev/null; then
     print_pass
     print_info "Bucket: gs://${bucket_name}"
   else
-    print_fail "Shared state bucket not found. Run: ./scripts/setup-gcp-projects.sh"
-    return 1
+    print_warn "State bucket not found"
+    print_info "Run: ./scripts/setup-gcp-projects.sh to create it"
+    return 0  # Not a critical failure
   fi
 
   # Check versioning
   print_check "bucket versioning enabled"
-  VERSIONING=$(gsutil versioning get "gs://${bucket_name}" 2>/dev/null | grep "Enabled")
+  VERSIONING=$(gsutil versioning get "gs://${bucket_name}" 2>/dev/null | grep "Enabled" || true)
   if [ -n "$VERSIONING" ]; then
     print_pass
   else
-    print_warn "Versioning not enabled. Run: gsutil versioning set on gs://${bucket_name}"
+    print_warn "Versioning not enabled"
+    print_info "Run: gsutil versioning set on gs://${bucket_name}"
   fi
 
-  # Check environment prefixes
-  print_check "environment state prefixes"
-  local found_prefixes=0
-  for env in "${EXISTING_PROJECTS[@]}"; do
-    # Check if the environment folder exists (look for any files in the prefix)
-    if gsutil ls "gs://${bucket_name}/${env}/" &> /dev/null; then
-      ((found_prefixes++))
-    fi
-  done
-
-  if [ $found_prefixes -eq ${#EXISTING_PROJECTS[@]} ]; then
+  # List environment prefixes (if any)
+  print_check "environment prefixes"
+  PREFIXES=$(gsutil ls "gs://${bucket_name}/" 2>/dev/null | grep -o '[^/]*/$' || true)
+  if [ -n "$PREFIXES" ]; then
     print_pass
-    for env in "${EXISTING_PROJECTS[@]}"; do
-      print_info "gs://${bucket_name}/${env}/"
-    done
-  elif [ $found_prefixes -gt 0 ]; then
-    print_warn "Some environment prefixes not found (${found_prefixes}/${#EXISTING_PROJECTS[@]})"
+    while IFS= read -r prefix; do
+      print_info "$prefix"
+    done <<< "$PREFIXES"
   else
-    print_warn "Environment prefixes not initialized yet"
-    print_info "Prefixes will be created on first Terragrunt run"
+    print_warn "No environment prefixes found yet"
+    print_info "Prefixes will be created when you run the setup script"
   fi
 }
 
@@ -291,18 +269,16 @@ validate_region() {
 validate_permissions() {
   print_section "IAM Permissions"
 
-  for env in "${EXISTING_PROJECTS[@]}"; do
-    local project_id="${PROJECT_PREFIX}-${env}"
+  print_check "permissions on $PROJECT_ID"
 
-    print_check "permissions on $project_id"
-
-    # Check if we can get IAM policy (requires viewer role at minimum)
-    if gcloud projects get-iam-policy "$project_id" &> /dev/null; then
-      print_pass
-    else
-      print_fail "Insufficient permissions to view IAM policy"
-    fi
-  done
+  # Check if we can get IAM policy (requires viewer role at minimum)
+  if gcloud projects get-iam-policy "$PROJECT_ID" &> /dev/null; then
+    print_pass
+    print_info "You have sufficient permissions to manage this project"
+  else
+    print_fail "Insufficient permissions to view IAM policy"
+    print_info "You may need roles/viewer or higher on this project"
+  fi
 }
 
 print_summary() {
@@ -341,21 +317,17 @@ print_summary() {
 main() {
   print_header "GCP Setup Validation"
 
+  # Check if project ID was provided
+  check_project_id_provided
+
+  print_info "Validating GCP project: $PROJECT_ID"
+  echo ""
+
+  # Run validations
   validate_prerequisites || true
-
-  # Detect which projects exist
-  detect_existing_projects || exit 1
-
   validate_region || true
-
-  # Validate only existing projects
-  for env in "${EXISTING_PROJECTS[@]}"; do
-    validate_project "$env" || true
-  done
-
-  # Validate shared state bucket
-  validate_shared_state_bucket || true
-
+  validate_project || true
+  validate_state_bucket || true
   validate_permissions || true
 
   echo ""
@@ -363,21 +335,13 @@ main() {
   exit_code=$?
 
   echo ""
-  echo "Validated environments: ${EXISTING_PROJECTS[*]}"
-
-  # Show message about adding more environments if only dev exists
-  if [ ${#EXISTING_PROJECTS[@]} -eq 1 ] && [ "${EXISTING_PROJECTS[0]}" = "dev" ]; then
-    echo ""
-    echo "Note: Only dev environment detected."
-    echo "To add staging/prod later: ./scripts/setup-gcp-projects.sh"
-  fi
-
-  echo ""
   if [ $exit_code -eq 0 ]; then
     echo "Next steps:"
-    echo "  1. Start creating Terraform modules: infra/modules/"
-    echo "  2. Configure Terragrunt: infra/terragrunt.hcl"
-    echo "  3. Deploy to dev: cd infra/stacks/dev && terragrunt run-all apply"
+    echo "  1. Configure Terragrunt: infra/terragrunt.hcl"
+    echo "     - Set bucket: ${PROJECT_ID}-terraform-state"
+    echo "     - Set project: ${PROJECT_ID}"
+    echo "  2. Start creating Terraform modules: infra/modules/"
+    echo "  3. Deploy infrastructure: cd infra/stacks/<env> && terragrunt run-all apply"
   fi
 
   exit $exit_code

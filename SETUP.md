@@ -71,38 +71,55 @@ gcloud auth list
 
 ## Step 1: GCP Project Setup
 
+### Prerequisites
+
+Before running the setup script, you must have an existing GCP project. If you don't have one:
+
+**Create a GCP Project** (choose one method):
+
+**Via GCP Console**:
+1. Go to [GCP Console - Create Project](https://console.cloud.google.com/projectcreate)
+2. Enter a project name and project ID
+3. Select a billing account
+4. Click "Create"
+
+**Via gcloud CLI**:
+```bash
+# Create project
+gcloud projects create my-company-dev
+
+# Link billing account
+gcloud billing projects link my-company-dev --billing-account=<YOUR_BILLING_ACCOUNT_ID>
+
+# To find your billing account ID:
+gcloud billing accounts list
+```
+
 ### Option A: Automated Setup (Recommended)
 
-Use the provided setup script to automatically create project(s), enable APIs, and create state bucket(s):
+Use the provided setup script to configure your existing project:
 
 ```bash
 # Run the setup script
 ./scripts/setup-gcp-projects.sh
 ```
 
-The script will prompt you to choose:
-1. **Dev only (recommended)** - Start with development environment
-2. **Dev + Staging** - If you want both right away
-3. **Dev + Staging + Prod** - All three environments
+The script will prompt you for:
+1. **GCP Project ID** - Your existing project ID (e.g., `my-company-dev`)
+2. **Environment name** - The environment name (e.g., `dev`, `staging`, `prod`)
 
-**Recommended**: Choose option 1 (Dev only) to start. You can add staging and prod later by re-running the script.
+**Recommended**: Start with a dev environment. You can add staging and prod later with additional projects.
 
 The script will:
-1. Check prerequisites
-2. Prompt for billing account selection
-3. Create selected GCP project(s):
-   - `generic-demo-dev` (always)
-   - `generic-demo-staging` (optional)
-   - `generic-demo-prod` (optional)
-4. Enable all required APIs in each project
-5. Create shared Terraform state bucket with environment prefixes:
-   - Bucket: `gs://generic-demo-terraform-state` (in dev project)
-   - Prefixes: `dev/`, `staging/`, `prod/`
+1. Check prerequisites (gcloud CLI, authentication)
+2. Verify your project exists and has billing enabled
+3. Enable all required APIs in the project
+4. Create Terraform state bucket with versioning:
+   - Bucket: `gs://{project-id}-terraform-state`
+   - Environment prefix: `{environment}/`
    - Versioning and lifecycle policies enabled
 
-**Expected duration**:
-- Dev only: 5-10 minutes
-- All three environments: 10-15 minutes
+**Expected duration**: 3-5 minutes per project
 
 ### Option B: Manual Setup
 
@@ -113,37 +130,40 @@ If you prefer manual setup, follow the instructions in [scripts/README.md](./scr
 After setup completes, run the validation script:
 
 ```bash
-./scripts/validate-setup.sh
+# Replace with your actual project ID
+./scripts/validate-setup.sh my-company-dev
 ```
 
 Expected output:
 ```
-Found 1 project(s): dev
-
 Total checks: 15
 Passed: 15
 Warnings: 0
 Failed: 0
 
 ✓ All validations passed! You're ready to proceed with Terraform deployment.
-
-Validated environments: dev
-
-Note: Only dev environment detected.
-To add staging/prod later: ./scripts/setup-gcp-projects.sh
 ```
 
 ### Adding Staging/Prod Later
 
 When you're ready to add staging or production environments:
 
-```bash
-# Re-run the setup script
-./scripts/setup-gcp-projects.sh
+1. **Create a new GCP project** (via Console or gcloud):
+   ```bash
+   gcloud projects create my-company-staging
+   gcloud billing projects link my-company-staging --billing-account=<BILLING_ACCOUNT_ID>
+   ```
 
-# Choose option 2 (Dev + Staging) or option 3 (Dev + Staging + Prod)
-# The script will skip the existing dev project and only create the new ones
-```
+2. **Run the setup script** for the new project:
+   ```bash
+   ./scripts/setup-gcp-projects.sh
+   # Enter the new project ID and environment name when prompted
+   ```
+
+3. **Validate** the new environment:
+   ```bash
+   ./scripts/validate-setup.sh my-company-staging
+   ```
 
 ---
 
