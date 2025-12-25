@@ -9,7 +9,7 @@ include "env" {
 }
 
 terraform {
-  source = "../../../modules/artifact-registry"
+  source = "../../../../modules/artifact-registry"
 }
 
 dependency "iam" {

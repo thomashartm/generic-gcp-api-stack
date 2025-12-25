@@ -1,5 +1,7 @@
-# Networking Module
-# Creates VPC, VPC connector for Cloud Run, firewall rules, and Cloud NAT
+###################################
+# Networking Module: Creates VPC, VPC connector for Cloud Run, firewall rules, and Cloud NAT
+###################################
+
 
 # VPC Network
 resource "google_compute_network" "vpc" {

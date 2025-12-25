@@ -61,7 +61,7 @@ terragrunt run-all apply
 
 Each module is self-contained and reusable across environments. See individual module READMEs for details:
 
-- [networking](./modules/networking/README.md)
+- [networking](modules/vpc/README.md)
 - [iam](./modules/iam/README.md)
 - [artifact-registry](./modules/artifact-registry/README.md)
 - [secret-manager](./modules/secret-manager/README.md)

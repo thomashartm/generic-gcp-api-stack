@@ -9,7 +9,8 @@ include "env" {
 }
 
 terraform {
-  source = "../../../modules/iam"
+  # need to rethink it as it is to tangled
+  source = "../../../../modules/iam"
 }
 
 inputs = {}

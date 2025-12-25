@@ -7,7 +7,4 @@ include "root" {
 
 # Environment-specific inputs
 inputs = {
-  environment = "dev"
-  project_id  = "generic-infra-demo"  # CHANGE THIS!
-  region      = "europe-west6"
 }

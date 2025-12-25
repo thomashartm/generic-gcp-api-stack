@@ -22,7 +22,7 @@ inputs = {
   # Domains for SSL certificate
   # Leave empty for dev to use IP-only access
   # Add your domain when ready: ["dev-api.example.com"]
-  domains = []
+  domains = ["demo-dev.thartm.net"]
 
   # Backend configuration
   backend_timeout_sec = 30
